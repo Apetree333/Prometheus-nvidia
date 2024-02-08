@@ -1,0 +1,599 @@
+import     * as core  from '@actions/core' import {OSType, getOs} from './platform'  import {AbstractLinks}
+    from './links/links' import {Method} 
+    from './method' import {SemVer} 
+    from 'semver' import {WindowsLinks}   from './links/windows-links' import {getLinks}
+    from './links/get-links'// Helper for converting string to SemVer and verifying it exists in the links export async function
+getVersion( versionString: string, method:   Method { 
+  const version =  new SemVer(versionString)  const links: AbstractLinks = 
+  await getLinks() let version switch (method) case 'local'  versions = links.getAvailableLocalCudaVersions()break case 'network': switch (await getOs()) { case OSType.linux:// TODO adapt this to  actual available network versions for linux
+          versions,: links.getAvailableLocalCudaVersions()
+          break case OSType.windows:
+          versions = (links as WindowsLinks).
+            getAvailableNetworkCudaVersions() break } core.debug(`Available versions: ${versions}`) if (versions.find(v => v.compare(version) ===0) !== undefined) {
+    core.debug(`Version available: ${version} core.debug(`Version `) ${version}}import * as core from '@actions/core'
+import * as path from 'path'
+import {OSType, getOs} from './platform'
+import {SemVer} from 'semver'
+
+export async function updatePath(version: SemVer): Promise<string> {
+  let cudaPath: string
+  switch (await getOs()) {
+    case OSType.linux:
+      cudaPath = `/usr/local/cuda-${version.major}.${version.minor}`
+      break
+    case OSType.windows:
+      cudaPath = `C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v${version.major}.${version.minor}`
+  }
+  core.debug(`Cuda path: ${cudaPath}`)
+  // Export $CUDA_PATH
+  core.exportVariable('CUDA_PATH', cudaPath)
+  core.debug(`Cuda path vx_y: ${cudaPath}`)
+  // Export $CUDA_PATH_VX_Y
+  core.exportVariable(`CUDA_PATH_V${version.major}_${version.minor}`, cudaPath)
+  core.exportVariable(
+    'CUDA_PATH_VX_Y',
+    `CUDA_PATH_V${version.major}_${version.minor}`
+  )
+  // Add $CUDA_PATH/bin to $PATH
+  const binPath = path.join(cudaPath, 'bin')
+  core.debug(`Adding to PATH: ${binPath}`)
+  core.addPath(binPath)
+
+  // Update LD_LIBRARY_PATH on linux, see: https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html#environment-setup
+  if ((await getOs()) === OSType.linux) {
+    // Get LD_LIBRARY_PATH
+    const libPath = process.env.LD_LIBRARY_PATH
+      ? process.env.LD_LIBRARY_PATH
+      : ''
+    // Get CUDA lib path
+    const cudaLibPath = path.join(cudaPath, 'lib64')
+    // Check if CUDA lib path is already in LD_LIBRARY_PATH
+    if (!libPath.split(':').includes(cudaLibPath)) {
+      // CUDA lib is not in LD_LIBRARY_PATH, so add it
+      core.debug(`Adding to LD_LIBRARY_PATH: ${cudaLibPath}`)
+      core.exportVariable(
+        'LD_LIBRARY_PATH',
+        cudaLibPath + path.delimiter + libPath
+      )
+    }
+  }
+  // Return cuda path
+  return cudaPath
+}import {debug} from '@actions/core'
+import os from 'os'
+
+export enum OSType {
+  windows = 'windows',
+  linux = 'linux'
+}
+
+export async function getOs(): Promise<OSType> {
+  const osPlatform = os.platform()
+  switch (osPlatform) {
+    case 'win32':
+      return OSType.windows
+    case 'linux':
+      return OSType.linux
+    default:
+      debug(`Unsupported OS: ${osPlatform}`)
+      throw new Error(`Unsupported OS: ${osPlatform}`)
+  }
+}
+
+export async function getRelease(): Promise<string> {
+  return os.release()
+}
+import {debug} from '@actions/core'
+import os from 'os'
+
+export enum OSType {
+  windows = 'windows',
+  linux = 'linux'
+}
+
+export async function getOs(): Promise<OSType> {
+  const osPlatform = os.platform()
+  switch (osPlatform) {
+    case 'win32':
+      return OSType.windows
+    case 'linux':
+      return OSType.linux
+    default:
+      debug(`Unsupported OS: ${osPlatform}`)
+      throw new Error(`Unsupported OS: ${osPlatform}`)
+  }
+}
+
+export async function getRelease(): Promise<string> {
+  return os.release()
+}import * as core from '@actions/core'
+
+export async function parsePackages(
+  subPackages: string,
+  parameterName: string
+): Promise<string[]> {
+  let subPackagesArray: string[] = []
+  try {
+    subPackagesArray = JSON.parse(subPackages)
+  } catch (error) {
+    const errString = `Error parsing input '${parameterName}' to a JSON string array: ${subPackages}`
+    core.debug(errString)
+    throw new Error(errString)
+  }
+  return subPackagesArray
+}export type Method = 'local' | 'network'
+
+export function parseMethod(methodString: string): Method {
+  switch (methodString) {
+    case 'local':
+      return 'local'
+    case 'network':
+      return 'network'
+    default:
+      throw new Error(`Invalid method string: ${methodString}`)
+  }
+}import * as core from '@actions/core'
+import {Method, parseMethod} from './method'
+import {OSType, getOs} from './platform'
+import {aptInstall, aptSetup, useApt} from './apt-installer'
+import {download} from './downloader'
+import {getVersion} from './version'
+import {install} from './installer'
+import {updatePath} from './update-path'
+import {parsePackages} from './parser'
+
+async function run(): Promise<void> {
+  try {
+    const cuda: string = core.getInput('cuda')
+    core.debug(`Desired cuda version: ${cuda}`)
+    const subPackagesArgName = 'sub-packages'
+    const subPackages: string = core.getInput(subPackagesArgName)
+    core.debug(`Desired subPackages: ${subPackages}`)
+    const nonCudaSubPackagesArgName = 'non-cuda-sub-packages'
+    const nonCudaSubPackages: string = core.getInput(nonCudaSubPackagesArgName)
+    core.debug(`Desired nonCudasubPackages: ${nonCudaSubPackages}`)
+    const methodString: string = core.getInput('method')
+    core.debug(`Desired method: ${methodString}`)
+    const linuxLocalArgs: string = core.getInput('linux-local-args')
+    core.debug(`Desired local linux args: ${linuxLocalArgs}`)
+    const useGitHubCache: boolean = core.getBooleanInput('use-github-cache')
+    core.debug(`Desired GitHub cache usage: ${useGitHubCache}`)
+    const useLocalCache: boolean = core.getBooleanInput('use-local-cache')
+    core.debug(`Desired local cache usage: ${useLocalCache}`)
+    const logFileSuffix: string = core.getInput('log-file-suffix')
+    core.debug(`Desired log file suffix: ${logFileSuffix}`)
+
+    // Parse subPackages array
+    const subPackagesArray: string[] = await parsePackages(
+      subPackages,
+      subPackagesArgName
+    )
+
+    // Parse nonCudaSubPackages array
+    const nonCudaSubPackagesArray: string[] = await parsePackages(
+      nonCudaSubPackages,
+      nonCudaSubPackagesArgName
+    )
+
+    // Parse method
+    const methodParsed: Method = parseMethod(methodString)
+    core.debug(`Parsed method: ${methodParsed}`)
+
+    // Parse version string
+    const version = await getVersion(cuda, methodParsed)
+
+    // Parse linuxLocalArgs array
+    let linuxLocalArgsArray: string[] = []
+    try {
+      linuxLocalArgsArray = JSON.parse(linuxLocalArgs)
+      // TODO verify that elements are valid package names (--samples, --driver, --toolkit, etc.)
+    } catch (error) {
+      const errString = `Error parsing input 'linux-local-args' to a JSON string array: ${linuxLocalArgs}`
+      core.debug(errString)
+      throw new Error(errString)
+    }
+
+    // Check if subPackages are specified in 'local' method on Linux
+    if (
+      methodParsed === 'local' &&
+      subPackagesArray.length > 0 &&
+      (await getOs()) === OSType.linux
+    ) {
+      throw new Error(
+        `Subpackages on 'local' method is not supported on Linux, use 'network' instead`
+      )
+    }
+
+    // Linux network install (uses apt repository)
+    const useAptInstall = await useApt(methodParsed)
+    if (useAptInstall) {
+      // Setup aptitude repos
+      await aptSetup(version)
+      // Install packages
+      const installResult = await aptInstall(
+        version,
+        subPackagesArray,
+        nonCudaSubPackagesArray
+      )
+      core.debug(`Install result: ${installResult}`)
+    } else {
+      // Download
+      const executablePath: string = await download(
+        version,
+        methodParsed,
+        useLocalCache,
+        useGitHubCache
+      )
+
+      // Install
+      await install(
+        executablePath,
+        version,
+        subPackagesArray,
+        linuxLocalArgsArray,
+        methodString,
+        logFileSuffix
+      )
+    }
+
+    // Add CUDA environment variables to GitHub environment variables
+    const cudaPath: string = await updatePath(version)
+
+    // Set output variables
+    core.setOutput('cuda', cuda)
+    core.setOutput('CUDA_PATH', cudaPath)
+  } catch (error) {
+    if (error instanceof Error) {
+      core.setFailed(error)
+    } else {
+      core.setFailed('Unknown error')
+    }
+  }
+}
+
+run()import artifact from '@actions/artifact'
+import * as core from '@actions/core'
+import * as glob from '@actions/glob'
+import {OSType, getOs, getRelease} from './platform'
+import {SemVer} from 'semver'
+import {exec} from '@actions/exec'
+
+export async function install(
+  executablePath: string,
+  version: SemVer,
+  subPackagesArray: string[],
+  linuxLocalArgsArray: string[],
+  method: string,
+  logFileSuffix: string
+): Promise<void> {
+  // Install arguments, see: https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html#runfile-advanced
+  // and https://docs.nvidia.com/cuda/cuda-installation-guide-microsoft-windows/index.html
+  let installArgs: string[]
+
+  // Command string that is executed
+  let command: string
+
+  // Subset of subpackages to install instead of everything, see: https://docs.nvidia.com/cuda/cuda-installation-guide-microsoft-windows/index.html#install-cuda-software
+  const subPackages: string[] = subPackagesArray
+
+  // Execution options which contain callback functions for stdout and stderr of install process
+  const execOptions = {
+    listeners: {
+      stdout: (data: Buffer) => {
+        core.debug(data.toString())
+      },
+      stderr: (data: Buffer) => {
+        core.debug(`Error: ${data.toString()}`)
+      }
+    }
+  }
+
+  // Configure OS dependent run command and args
+  switch (await getOs()) {
+    case OSType.linux:
+      // Root permission needed on linux
+      command = `sudo ${executablePath}`
+      // Install silently, and add additional arguments
+      installArgs = ['--silent'].concat(linuxLocalArgsArray)
+      break
+    case OSType.windows:
+      // Windows handles permissions automatically
+      command = executablePath
+      // Install silently
+      installArgs = ['-s']
+      // Add subpackages to command args (if any)
+      installArgs = installArgs.concat(
+        subPackages.map(subPackage => {
+          // Display driver sub package name is not dependent on version
+          if (subPackage === 'Display.Driver') {
+            return subPackage
+          }
+          return `${subPackage}_${version.major}.${version.minor}`
+        })
+      )
+      break
+  }
+
+  // Run installer
+  try {
+    core.debug(`Running install executable: ${executablePath}`)
+    const exitCode = await exec(command, installArgs, execOptions)
+    core.debug(`Installer exit code: ${exitCode}`)
+  } catch (error) {
+    core.warning(`Error during installation: ${error}`)
+    throw error
+  } finally {
+    // Always upload installation log regardless of error
+    const osType = await getOs()
+    const osRelease = await getRelease()
+    if (osType === OSType.linux) {
+      const artifactName = `cuda-install-${osType}-${osRelease}-${method}-${logFileSuffix}`
+      const patterns = ['/var/log/cuda-installer.log']
+      const globber = await glob.create(patterns.join('\n'))
+      const files = await globber.glob()
+      if (files.length > 0) {
+        const rootDirectory = '/var/log'
+        const uploadResult = await artifact.uploadArtifact(
+          artifactName,
+          files,
+          rootDirectory
+        )
+        core.debug(`Upload result: ${uploadResult}`)
+      } else {
+        core.debug(`No log file to upload`)
+      }
+    }
+  }
+}import * as cache from '@actions/cache'
+import * as core from '@actions/core'
+import * as glob from '@actions/glob'
+import * as tc from '@actions/tool-cache'
+import * as io from '@actions/io'
+import {OSType, getOs, getRelease} from './platform'
+import {AbstractLinks} from './links/links'
+import {Method} from './method'
+import {SemVer} from 'semver'
+import {WindowsLinks} from './links/windows-links'
+import fs from 'fs'
+import {getLinks} from './links/get-links'
+
+// Download helper which returns the installer executable and caches it for next runs
+export async function download(
+  version: SemVer,
+  method: Method,
+  useLocalCache: boolean,
+  useGitHubCache: boolean
+): Promise<string> {
+  // First try to find tool with desired version in tool cache (local to machine)
+  const toolName = 'cuda_installer'
+  const osType = await getOs()
+  const osRelease = await getRelease()
+  const toolId = `${toolName}-${osType}-${osRelease}`
+  // Path that contains the executable file
+  let executableDirectory: string | undefined
+  const cacheKey = `${toolId}-${version}`
+  const cacheDirectory = cacheKey
+  if (useLocalCache) {
+    const toolPath = tc.find(toolId, `${version}`)
+    if (toolPath) {
+      // Tool is already in cache
+      core.debug(`Found in local machine cache ${toolPath}`)
+      executableDirectory = toolPath
+    } else {
+      core.debug(`Not found in local cache`)
+    }
+  }
+  if (executableDirectory === undefined && useGitHubCache) {
+    // Second option, get tool from GitHub cache if enabled
+    const cacheResult: string | undefined = await cache.restoreCache(
+      [cacheDirectory],
+      cacheKey
+    )
+    if (cacheResult !== undefined) {
+      core.debug(`Found in GitHub cache ${cacheDirectory}`)
+      executableDirectory = cacheDirectory
+    } else {
+      core.debug(`Not found in GitHub cache`)
+    }
+  }
+  if (executableDirectory === undefined) {
+    // Final option, download tool from NVIDIA servers
+    core.debug(`Not found in local/GitHub cache, downloading...`)
+    // Get download URL
+    const url: URL = await getDownloadURL(method, version)
+    // Get intsaller filename extension depending on OS
+    const fileExtension: string = getFileExtension(osType)
+    const downloadDirectory = `cuda_download`
+    const destFileName = `${toolId}_${version}.${fileExtension}`
+    const destFilePath = `${downloadDirectory}/${destFileName}`
+    // Check if file already exists
+    if (!(await fileExists(destFilePath))) {
+      core.debug(`File at ${destFilePath} does not exist, downloading`)
+      // Download executable
+      await tc.downloadTool(url.toString(), destFilePath)
+    } else {
+      core.debug(`File at ${destFilePath} already exists, skipping download`)
+    }
+    if (useLocalCache) {
+      // Cache download to local machine cache
+      const localCacheDirectory = await tc.cacheFile(
+        destFilePath,
+        destFileName,
+        `${toolName}-${osType}`,
+        `${version}`
+      )
+      core.debug(
+        `Cached download to local machine cache at ${localCacheDirectory}`
+      )
+      executableDirectory = localCacheDirectory
+    }
+    if (useGitHubCache) {
+      // Move file to GitHub cache directory
+      core.debug(`Copying ${destFilePath} to ${cacheDirectory}`)
+      await io.mkdirP(cacheDirectory)
+      await io.mv(destFilePath, cacheDirectory)
+      // Save cache directory to GitHub cache
+      const cacheId = await cache.saveCache([cacheDirectory], cacheKey)
+      if (cacheId !== -1) {
+        core.debug(`Cached download to GitHub cache with cache id ${cacheId}`)
+      } else {
+        core.debug(`Did not cache, cache possibly already exists`)
+      }
+      core.debug(`Tool was moved to cache directory ${cacheDirectory}`)
+      executableDirectory = cacheDirectory
+    }
+    executableDirectory = downloadDirectory
+  }
+  core.debug(`Executable path ${executableDirectory}`)
+  // String with full executable path
+  let fullExecutablePath: string
+  // Get list of files in tool cache
+  const filesInCache = await (
+    await glob.create(`${executableDirectory}/**.*`)
+  ).glob()
+  core.debug(`Files in tool cache:`)
+  for (const f of filesInCache) {
+    core.debug(f)
+  }
+  if (filesInCache.length > 1) {
+    throw new Error(`Got multiple file in tool cache: ${filesInCache.length}`)
+  } else if (filesInCache.length === 0) {
+    throw new Error(`Got no files in tool cahce`)
+  } else {
+    fullExecutablePath = filesInCache[0]
+  }
+  // Make file executable on linux
+  if ((await getOs()) === OSType.linux) {
+    // 0755 octal notation permission is: owner(r,w,x), group(r,w,x), other(r,x) where r=read, w=write, x=execute
+    await fs.promises.chmod(fullExecutablePath, '0755')
+  }
+  // Return full executable path
+  return fullExecutablePath
+}
+
+function getFileExtension(osType: OSType): string {
+  switch (osType) {
+    case OSType.windows:
+      return 'exe'
+    case OSType.linux:
+      return 'run'
+  }
+}
+
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    const stats = await fs.promises.stat(filePath)
+    core.debug(`Got the following stats for ${filePath}: ${stats}`)
+    return !!stats
+  } catch (e) {
+    core.debug(`Got error while checking if ${filePath} exists: ${e}`)
+    return false
+  }
+}
+
+async function getDownloadURL(method: string, version: SemVer): Promise<URL> {
+  const links: AbstractLinks = await getLinks()
+  switch (method) {
+    case 'local':
+      return links.getLocalURLFromCudaVersion(version)
+    case 'network':
+      if (!(links instanceof WindowsLinks)) {
+        core.debug(`Tried to get windows links but got linux links instance`)
+        throw new Error(
+          `Network mode is not supported by linux, shouldn't even get here`
+        )
+      }
+      return links.getNetworkURLFromCudaVersion(version)
+    default:
+      throw new Error(
+        `Invalid method: expected either 'local' or 'network', got '${method}'`
+      )
+  }
+}import * as core from '@actions/core'
+import {OSType, getOs} from './platform'
+import {Method} from './method'
+import {SemVer} from 'semver'
+import {exec} from '@actions/exec'
+import {execReturnOutput} from './run-command'
+
+export async function useApt(method: Method): Promise<boolean> {
+  return method === 'network' && (await getOs()) === OSType.linux
+}
+
+export async function aptSetup(version: SemVer): Promise<void> {
+  const osType = await getOs()
+  if (osType !== OSType.linux) {
+    throw new Error(
+      `apt setup can only be run on linux runners! Current os type: ${osType}`
+    )
+  }
+  core.debug(`Setup packages for ${version}`)
+  const ubuntuVersion: string = await execReturnOutput('lsb_release', ['-sr'])
+  const ubuntuVersionNoDot = ubuntuVersion.replace('.', '')
+  const pinFilename = `cuda-ubuntu${ubuntuVersionNoDot}.pin`
+  const arch = `x86_64`
+  const pinUrl = `https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${ubuntuVersionNoDot}/${arch}/${pinFilename}`
+  const repoUrl = `http://developer.download.nvidia.com/compute/cuda/repos/ubuntu${ubuntuVersionNoDot}/${arch}/`
+  const keyRingVersion = `1.0-1`
+  const keyRingUrl = `https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${ubuntuVersionNoDot}/${arch}/cuda-keyring_${keyRingVersion}_all.deb`
+  const keyRingFilename = `cuda_keyring.deb`
+
+  core.debug(`Pin filename: ${pinFilename}`)
+  core.debug(`Pin url: ${pinUrl}`)
+  core.debug(`Keyring url: ${keyRingUrl}`)
+
+  core.debug(`Downloading keyring`)
+  await exec(`wget ${keyRingUrl} -O ${keyRingFilename}`)
+  await exec(`sudo dpkg -i ${keyRingFilename}`)
+
+  core.debug('Adding CUDA Repository')
+  await exec(`wget ${pinUrl}`)
+  await exec(
+    `sudo mv ${pinFilename} /etc/apt/preferences.d/cuda-repository-pin-600`
+  )
+  await exec(`sudo add-apt-repository "deb ${repoUrl} /"`)
+  await exec(`sudo apt-get update`)
+}
+
+export async function aptInstall(
+  version: SemVer,
+  subPackages: string[],
+  nonCudaSubPackages: string[]
+): Promise<number> {
+  const osType = await getOs()
+  if (osType !== OSType.linux) {
+    throw new Error(
+      `apt install can only be run on linux runners! Current os type: ${osType}`
+    )
+  }
+  if (subPackages.length === 0) {
+    // Install everything
+    const packageName = `cuda-${version.major}-${version.minor}`
+    core.debug(`Install package: ${packageName}`)
+    return await exec(`sudo apt-get -y install`, [packageName])
+  } else {
+    // Only install specified packages
+    const prefixedSubPackages = subPackages.map(
+      subPackage => `cuda-${subPackage}`
+    )
+    const versionedSubPackages = prefixedSubPackages
+      .concat(nonCudaSubPackages)
+      .map(
+        nonCudaSubPackage =>
+          `${nonCudaSubPackage}-${version.major}-${version.minor}`
+      )
+    core.debug(`Only install subpackages: ${versionedSubPackages}`)
+    return await exec(`sudo apt-get -y install`, versionedSubPackages)
+  }
+}name: List paths (windows)
+        if: runner.os == 'Windows shell'
+        run: |
+          ls $env:CUDA_PATH  ls $env:CUDA_PATH\bin ls $env:CUDA_PATH\include
+      - name: List paths (linux)
+        if: runner.os == 'Linux'
+        run: |
+          ls $CUDA_PATH ls $
+
+      
+          #MIT (c) apetree1001@email.phoenix.edu
+          Alexander petree 2024
