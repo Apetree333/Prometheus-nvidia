@@ -1,71 +1,47 @@
 # This is a basic workflow to help you get started with Actions
-
-name: CI
-
-# Controls when the action will run.
-on:
-  # Triggers the workflow on push or pull request events but only for the master branch
+name: "CI" # Controls when the action will run.
+on: # Triggers the workflow on push or pull request events but only for the master branch
   push:
     branches: [master]
-  pull_request:
-
-  # Allows you to run this workflow manually from the Actions tab
-  workflow_dispatch:
-
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
-jobs:
-  # This workflow contains a single job called "CI"
-  CI:
-    # The type of runners that the job will run on
+  pull_request:  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch: # A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:  # This workflow contains a single job called "CI"
+  CI: # The type of runners that the job will run on
     strategy:
       fail-fast: false
       matrix:
         os: [windows-2022, windows-2019, ubuntu-22.04, ubuntu-20.04]
         method: [local, network]
-    runs-on: ${{ matrix.os }}
-
-    # Steps represent a sequence of tasks that will be executed as part of the job
-    steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v4
-
-      # npm cache
+    runs-on: ${{ matrix.os }} # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:  # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - uses: actions/checkout@v4 # npm cache
       - name: Get npm cache directory
         id: npm-cache-dir
         shell: bash
         run: |
           echo "dir=$(npm config get cache)" >> $GITHUB_OUTPUT
       - uses: actions/cache@v3
-        id: npm-cache # use this to check for `cache-hit` ==> if: steps.npm-cache.outputs.cache-hit != 'true'
+        id: npm-cache 
+        # use this to check for `cache-hit`
+        #  ==> # if: steps.npm-cache.outputs.cache-hit 
+         # != 'true'
         with:
           path: ${{ steps.npm-cache-dir.outputs.dir }}
           key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-node-
-
       - name: Install npm dependencies
-        run: npm i
-
+        run: npm 
       - name: Build
         run: npm run build
-
       - name: Format check
         run: npm run format-check
-
       - name: Lint
         run: npm run lint
-
-      - name: Package
-        run: npm run package
-
-      - name: Test
-        run: npm run test
-
-      - name: Run the action on this runner with method ${{matrix.method}}
-        uses: ./
-        with:
-          method: ${{matrix.method}}
-
+      - name: Package npm 
+      - run: package
+      - name:  test the action on this runner with method ${{matrix.method}}
+        uses: /method ${{matrix.method}}
       - name: Run the action on this runner with nvcc and libcublas subpackages (Linux)
         if: runner.os == 'Linux' && matrix.method == 'network'
         uses: ./
@@ -74,29 +50,6 @@ jobs:
           sub-packages: '["nvcc"]'
           non-cuda-sub-packages: '["libcublas"]'
           log-file-suffix: 'nvcc-libcublas'
-
       - name: Run the action on this runner with nvcc subpackage only (Windows)
-        if: runner.os == 'Windows'
-        uses: ./
-        with:
-          method: ${{matrix.method}}
-          sub-packages: '["nvcc"]'
-          log-file-suffix: 'nvcc'
-
-      - name: Test if nvcc is available
-        run: nvcc -V
-
-      - name: List paths (windows)
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          ls $env:CUDA_PATH
-          ls $env:CUDA_PATH\bin
-          ls $env:CUDA_PATH\include
-
-      - name: List paths (linux)
-        if: runner.os == 'Linux'
-        run: |
-          ls $CUDA_PATH
-          ls $CUDA_PATH/bin
-          ls $CUDA_PATH/include
+        if: runner.os == 'Windows' uses:  / with {"matrix.method"}
+    sub-packages: "[nvcc log-file-suffix ]""nvcc Test if nvcc is available
